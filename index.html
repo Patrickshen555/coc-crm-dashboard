@@ -457,7 +457,56 @@ function renderFlowSections(cd) {
 }
 
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
-switchTab('L1');
+
+// ── URL参数读取：从链接参数初始化筛选 ──
+function readUrlParams() {
+  var p = new URLSearchParams(window.location.search);
+  if(p.has('tab')) {
+    var tab = p.get('tab');
+    if(['L1','L2','L3','L4','L5'].indexOf(tab)>=0) switchTab(tab);
+  }
+  if(p.has('tier')) document.getElementById('tierFilter').value = p.get('tier');
+  if(p.has('search')) document.getElementById('searchInput').value = p.get('search');
+  if(p.has('country')) document.getElementById('l5CountryFilter').value = p.get('country');
+  if(p.has('lane')) document.getElementById('l2LaneFilter').value = p.get('lane');
+  if(p.has('port')) document.getElementById('l3PortFilter').value = p.get('port');
+  if(p.has('sort')) sortCol = p.get('sort');
+  if(p.has('dir')) sortDir = p.get('dir')==='asc'?'asc':'desc';
+  // If any filter param was set, apply them
+  if(p.toString()) applyFilters();
+  else switchTab('L1');
+}
+
+// ── URL参数同步：筛选变化时更新链接 ──
+function syncUrlParams() {
+  var p = new URLSearchParams();
+  p.set('tab', currentTab);
+  var tier = document.getElementById('tierFilter').value;
+  var search = document.getElementById('searchInput').value;
+  var country = document.getElementById('l5CountryFilter').value;
+  var lane = document.getElementById('l2LaneFilter').value;
+  var port = document.getElementById('l3PortFilter').value;
+  if(tier) p.set('tier', tier);
+  if(search) p.set('search', search);
+  if(country) p.set('country', country);
+  if(lane) p.set('lane', lane);
+  if(port) p.set('port', port);
+  if(sortCol!=='TOTAL_SCORE'||sortDir!=='desc') {
+    p.set('sort', sortCol);
+    p.set('dir', sortDir);
+  }
+  var url = window.location.pathname + (p.toString()?'?'+p.toString():'');
+  history.replaceState(null, '', url);
+}
+
+// Hook applyFilters to also sync URL
+var _origApplyFilters = applyFilters;
+applyFilters = function() {
+  _origApplyFilters();
+  syncUrlParams();
+};
+
+readUrlParams();
 </script>
 </body>
 </html>
