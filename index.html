@@ -183,6 +183,7 @@
     <select id="l3PortFilter" onchange="applyFilters()" style="display:none;">
       <option value="">全部口岸</option><option value="AEJEA">AEJEA</option><option value="CNFOS">CNFOS</option><option value="CNHMN">CNHMN</option><option value="CNHUA">CNHUA</option><option value="CNJMN">CNJMN</option><option value="CNNAS">CNNAS</option><option value="CNNGB">CNNGB</option><option value="CNNJG">CNNJG</option><option value="CNQZH">CNQZH</option><option value="CNSHA">CNSHA</option><option value="CNSHK">CNSHK</option><option value="CNSWA">CNSWA</option><option value="CNTAO">CNTAO</option><option value="CNXGG">CNXGG</option><option value="CNXMN">CNXMN</option><option value="CNZJG">CNZJG</option><option value="CNZPU">CNZPU</option><option value="CNZSN">CNZSN</option><option value="CNZUH">CNZUH</option><option value="DJJIB">DJJIB</option><option value="EGALY">EGALY</option><option value="EGDAM">EGDAM</option><option value="EGSOK">EGSOK</option><option value="HKHKG">HKHKG</option><option value="IDBLW">IDBLW</option><option value="IDJKT">IDJKT</option><option value="IDSUB">IDSUB</option><option value="INMUN">INMUN</option><option value="INNSA">INNSA</option><option value="JOAQJ">JOAQJ</option><option value="JPNGO">JPNGO</option><option value="JPOSA">JPOSA</option><option value="JPTYO">JPTYO</option><option value="JPUKB">JPUKB</option><option value="JPYOK">JPYOK</option><option value="KEMBA">KEMBA</option><option value="KRINC">KRINC</option><option value="KRPUS">KRPUS</option><option value="MYPEN">MYPEN</option><option value="MYPGU">MYPGU</option><option value="MYPKG">MYPKG</option><option value="PHMNL">PHMNL</option><option value="PHMNN">PHMNN</option><option value="PKKHI">PKKHI</option><option value="SADMM">SADMM</option><option value="SAJED">SAJED</option><option value="SDPZU">SDPZU</option><option value="THBKK">THBKK</option><option value="THBKS">THBKS</option><option value="THLCH">THLCH</option><option value="THSCS">THSCS</option><option value="TRALI">TRALI</option><option value="TRIST">TRIST</option><option value="TRIZT">TRIZT</option><option value="TRMER">TRMER</option><option value="TWKEL">TWKEL</option><option value="TWKHH">TWKHH</option><option value="TWTPE">TWTPE</option><option value="TWTXG">TWTXG</option><option value="VNHPH">VNHPH</option><option value="VNSGN">VNSGN</option><option value="VNVUT">VNVUT</option><option value="YEADE">YEADE</option>
     </select>
+    <span id="lockHint" style="display:none;font-size:11px;color:var(--text-light);background:var(--surface-alt);padding:2px 8px;border-radius:4px;">🔒 部分筛选已锁定</span>
     <button class="btn btn-secondary" onclick="resetFilters()">重置</button>
     <span id="filterCount" style="font-size:12px;color:var(--text-light);"></span>
   </div>
@@ -252,6 +253,7 @@ var PAGE_SIZE = 50;
 var filteredData = [];
 var sortCol = 'TOTAL_SCORE';
 var sortDir = 'desc';
+var lockedFilters = {};  // URL参数锁定的筛选 {port:'CNSHA', lane:'TH', ...}
 
 var TAB_COLUMNS = {
   L1: ['SHIPPER_CD','SHIPPER_NAME','TEU','TEU_SCORE','TEU_TIER','CM_SCORE','CM_TIER','CM_OFF_SCORE','OFF_TIER','TOTAL_SCORE','T_TIER'],
@@ -288,10 +290,10 @@ function switchTab(tab) {
 function applyFilters() {
   var data = ALL_DATA[currentTab]||[];
   var search = document.getElementById('searchInput').value.toLowerCase();
-  var tierF = document.getElementById('tierFilter').value;
-  var countryF = document.getElementById('l5CountryFilter').value;
-  var laneF = document.getElementById('l2LaneFilter').value;
-  var portF = document.getElementById('l3PortFilter').value;
+  var tierF = lockedFilters.tier || document.getElementById('tierFilter').value;
+  var countryF = lockedFilters.country || document.getElementById('l5CountryFilter').value;
+  var laneF = lockedFilters.lane || document.getElementById('l2LaneFilter').value;
+  var portF = lockedFilters.port || document.getElementById('l3PortFilter').value;
   if(search) data = data.filter(function(r){return(r.SHIPPER_CD||'').toLowerCase().indexOf(search)>=0||(r.SHIPPER_NAME||'').toLowerCase().indexOf(search)>=0;});
   if(tierF) data = data.filter(function(r){return r.T_TIER===tierF;});
   if(currentTab==='L5'&&countryF) data = data.filter(function(r){return r.ORIGIN_COUNTRY===countryF;});
@@ -302,7 +304,7 @@ function applyFilters() {
   currentPage = 1; renderTable();
 }
 
-function resetFilters(){document.getElementById('searchInput').value='';document.getElementById('tierFilter').value='';document.getElementById('l5CountryFilter').value='';document.getElementById('l2LaneFilter').value='';document.getElementById('l3PortFilter').value='';applyFilters();}
+function resetFilters(){document.getElementById('searchInput').value='';if(!lockedFilters.tier)document.getElementById('tierFilter').value='';if(!lockedFilters.country)document.getElementById('l5CountryFilter').value='';if(!lockedFilters.lane)document.getElementById('l2LaneFilter').value='';if(!lockedFilters.port)document.getElementById('l3PortFilter').value='';applyFilters();}
 
 function renderTable() {
   var cols = TAB_COLUMNS[currentTab];
@@ -458,39 +460,73 @@ function renderFlowSections(cd) {
 
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
 
-// ── URL参数读取：从链接参数初始化筛选 ──
+// ── URL参数读取：从链接参数初始化筛选，lock后缀=锁定不可改 ──
 function readUrlParams() {
   var p = new URLSearchParams(window.location.search);
+  // Tab
   if(p.has('tab')) {
     var tab = p.get('tab');
     if(['L1','L2','L3','L4','L5'].indexOf(tab)>=0) switchTab(tab);
   }
-  if(p.has('tier')) document.getElementById('tierFilter').value = p.get('tier');
+  // Lockable filters: port/lane/country/tier support "lock" suffix
+  // e.g. ?port=CNSHA (set+lock) or ?port_lock=CNSHA (explicit lock)
+  var filterMap = {
+    'tier': {id:'tierFilter', key:'tier'},
+    'country': {id:'l5CountryFilter', key:'country'},
+    'lane': {id:'l2LaneFilter', key:'lane'},
+    'port': {id:'l3PortFilter', key:'port'}
+  };
+  for(var fk in filterMap) {
+    var fm = filterMap[fk];
+    var val = p.get(fk);
+    var lockVal = p.get(fk + '_lock');
+    // If _lock variant is used, always lock
+    if(lockVal) {
+      lockedFilters[fk] = lockVal;
+      document.getElementById(fm.id).value = lockVal;
+      document.getElementById(fm.id).disabled = true;
+      document.getElementById(fm.id).style.opacity = '0.6';
+      document.getElementById(fm.id).style.cursor = 'not-allowed';
+    } else if(val) {
+      // Check if "lock" param is set globally or per-key
+      if(p.get('lock') === fk || p.get('lock') === 'all') {
+        lockedFilters[fk] = val;
+        document.getElementById(fm.id).value = val;
+        document.getElementById(fm.id).disabled = true;
+        document.getElementById(fm.id).style.opacity = '0.6';
+        document.getElementById(fm.id).style.cursor = 'not-allowed';
+      } else {
+        document.getElementById(fm.id).value = val;
+      }
+    }
+  }
   if(p.has('search')) document.getElementById('searchInput').value = p.get('search');
-  if(p.has('country')) document.getElementById('l5CountryFilter').value = p.get('country');
-  if(p.has('lane')) document.getElementById('l2LaneFilter').value = p.get('lane');
-  if(p.has('port')) document.getElementById('l3PortFilter').value = p.get('port');
   if(p.has('sort')) sortCol = p.get('sort');
   if(p.has('dir')) sortDir = p.get('dir')==='asc'?'asc':'desc';
+  // Show lock hint if any filter is locked
+  if(Object.keys(lockedFilters).length > 0) {
+    document.getElementById('lockHint').style.display = 'inline';
+  }
   // If any filter param was set, apply them
   if(p.toString()) applyFilters();
   else switchTab('L1');
 }
 
-// ── URL参数同步：筛选变化时更新链接 ──
+// ── URL参数同步：筛选变化时更新链接，锁定参数始终保留 ──
 function syncUrlParams() {
   var p = new URLSearchParams();
   p.set('tab', currentTab);
-  var tier = document.getElementById('tierFilter').value;
+  var tier = lockedFilters.tier || document.getElementById('tierFilter').value;
   var search = document.getElementById('searchInput').value;
-  var country = document.getElementById('l5CountryFilter').value;
-  var lane = document.getElementById('l2LaneFilter').value;
-  var port = document.getElementById('l3PortFilter').value;
-  if(tier) p.set('tier', tier);
+  var country = lockedFilters.country || document.getElementById('l5CountryFilter').value;
+  var lane = lockedFilters.lane || document.getElementById('l2LaneFilter').value;
+  var port = lockedFilters.port || document.getElementById('l3PortFilter').value;
+  // Locked params always written with _lock suffix
+  if(lockedFilters.tier) { p.set('tier_lock', tier); } else if(tier) { p.set('tier', tier); }
+  if(lockedFilters.country) { p.set('country_lock', country); } else if(country) { p.set('country', country); }
+  if(lockedFilters.lane) { p.set('lane_lock', lane); } else if(lane) { p.set('lane', lane); }
+  if(lockedFilters.port) { p.set('port_lock', port); } else if(port) { p.set('port', port); }
   if(search) p.set('search', search);
-  if(country) p.set('country', country);
-  if(lane) p.set('lane', lane);
-  if(port) p.set('port', port);
   if(sortCol!=='TOTAL_SCORE'||sortDir!=='desc') {
     p.set('sort', sortCol);
     p.set('dir', sortDir);
