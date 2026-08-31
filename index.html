@@ -278,6 +278,7 @@ function switchTab(tab) {
   document.getElementById('l5Overview').style.display=tab==='L5'?'':'none';
   var titles={L1:'L1 Overall',L2:'L2 by Lane',L3:'L3 by Port',L4:'L4 Port×Lane',L5:'L5 Loading Country×Lane'};
   document.getElementById('tableTitle').textContent=titles[tab];
+  if(TAB_COLUMNS[tab] && TAB_COLUMNS[tab].indexOf(sortCol)<0){ sortCol='TOTAL_SCORE'; sortDir='desc'; }
   applyFilters();
 }
 
