@@ -265,6 +265,7 @@ var SCORE_COLS = ['TEU_SCORE','CM_SCORE','CM_OFF_SCORE','TOTAL_SCORE'];
 var TIER_COLS = ['TEU_TIER','CM_TIER','OFF_TIER','T_TIER'];
 
 function switchTab(tab) {
+  if(lockedFilters.tab && lockedFilters.tab.indexOf(tab)<0) return;  // tab locked by URL (may be a set like L3,L4)
   currentTab = tab; currentPage = 1;
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
   for(var i=0;i<document.querySelectorAll('.tab-btn').length;i++){
@@ -280,6 +281,23 @@ function switchTab(tab) {
   applyFilters();
 }
 
+function disableTabButtons() {
+  var locked = lockedFilters.tab;
+  if(!locked) return;
+  document.querySelectorAll('.tab-btn').forEach(function(b){
+    var onclick = b.getAttribute('onclick')||'';
+    var inside = false;
+    for(var i=0;i<locked.length;i++){
+      if(onclick.indexOf("'"+locked[i]+"'")>=0){ inside=true; break; }
+    }
+    if(!inside){
+      b.style.opacity='0.5';
+      b.style.cursor='not-allowed';
+      b.style.pointerEvents='none';
+    }
+  });
+}
+
 function applyFilters() {
   var data = ALL_DATA[currentTab]||[];
   var search = document.getElementById('searchInput').value.toLowerCase();
@@ -287,11 +305,13 @@ function applyFilters() {
   var countryF = lockedFilters.country || document.getElementById('l5CountryFilter').value;
   var laneF = lockedFilters.lane || document.getElementById('l2LaneFilter').value;
   var portF = lockedFilters.port || document.getElementById('l3PortFilter').value;
+  // Multi-port support: comma-separated values (e.g. "CNSHA,CNNGB")
+  var portList = portF ? portF.split(',') : [];
   // Dimension filters first (these define the "base" context for share calculation)
   if(tierF) data = data.filter(function(r){return r.T_TIER===tierF;});
   if(currentTab==='L5'&&countryF) data = data.filter(function(r){return r.ORIGIN_COUNTRY===countryF;});
   if((currentTab==='L2'||currentTab==='L4'||currentTab==='L5')&&laneF) data = data.filter(function(r){return r.LANE===laneF;});
-  if((currentTab==='L3'||currentTab==='L4')&&portF) data = data.filter(function(r){return r.PORT===portF;});
+  if((currentTab==='L3'||currentTab==='L4')&&portF) data = data.filter(function(r){return portList.indexOf(r.PORT)>=0;});
   // Save base data (before search) for lane share denominator
   baseData = data;
   // Then apply search filter for display
@@ -480,10 +500,24 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal()
 // ── URL params: initialize filters from URL, _lock suffix = locked ──
 function readUrlParams() {
   var p = new URLSearchParams(window.location.search);
-  // Tab
-  if(p.has('tab')) {
-    var tab = p.get('tab');
-    if(['L1','L2','L3','L4','L5'].indexOf(tab)>=0) switchTab(tab);
+  // Tab — supports tab_lock to lock the layer view (comma-separated set allowed)
+  // e.g. ?tab=L3 (set) or ?tab_lock=L3 / ?tab_lock=L3,L4 / ?tab=L3&lock=tab|all (lock)
+  var tabLock = p.get('tab_lock');
+  var tabVal = p.get('tab');
+  if(tabLock || (tabVal && (p.get('lock')==='tab'||p.get('lock')==='all'))) {
+    var tRaw = tabLock || tabVal;
+    var tabs = [];
+    var parts = tRaw.split(',');
+    for(var ti=0;ti<parts.length;ti++){
+      if(['L1','L2','L3','L4','L5'].indexOf(parts[ti])>=0) tabs.push(parts[ti]);
+    }
+    if(tabs.length>0) {
+      lockedFilters.tab = tabs;
+      switchTab(tabs[0]);
+      disableTabButtons();
+    }
+  } else if(tabVal) {
+    if(['L1','L2','L3','L4','L5'].indexOf(tabVal)>=0) switchTab(tabVal);
   }
   // Lockable filters: port/lane/country/tier support "lock" suffix
   // e.g. ?port=CNSHA (set+lock) or ?port_lock=CNSHA (explicit lock)
@@ -497,23 +531,25 @@ function readUrlParams() {
     var fm = filterMap[fk];
     var val = p.get(fk);
     var lockVal = p.get(fk + '_lock');
-    // If _lock variant is used, always lock
-    if(lockVal) {
-      lockedFilters[fk] = lockVal;
-      document.getElementById(fm.id).value = lockVal;
-      document.getElementById(fm.id).disabled = true;
-      document.getElementById(fm.id).style.opacity = '0.6';
-      document.getElementById(fm.id).style.cursor = 'not-allowed';
-    } else if(val) {
-      // Check if "lock" param is set globally or per-key
-      if(p.get('lock') === fk || p.get('lock') === 'all') {
-        lockedFilters[fk] = val;
-        document.getElementById(fm.id).value = val;
-        document.getElementById(fm.id).disabled = true;
-        document.getElementById(fm.id).style.opacity = '0.6';
-        document.getElementById(fm.id).style.cursor = 'not-allowed';
-      } else {
-        document.getElementById(fm.id).value = val;
+    var effVal = lockVal || val;
+    var isLocked = !!lockVal || (val && (p.get('lock') === fk || p.get('lock') === 'all'));
+    if(effVal) {
+      var sel = document.getElementById(fm.id);
+      // Multi-value (comma-separated, e.g. port_lock=CNSHA,CNNGB): create a combined option
+      if(effVal.indexOf(',') >= 0 && sel) {
+        var opt = document.createElement('option');
+        opt.value = effVal;
+        opt.textContent = effVal.split(',').join(' + ');
+        sel.appendChild(opt);
+      }
+      if(sel) sel.value = effVal;
+      if(isLocked) {
+        lockedFilters[fk] = effVal;
+        if(sel) {
+          sel.disabled = true;
+          sel.style.opacity = '0.6';
+          sel.style.cursor = 'not-allowed';
+        }
       }
     }
   }
@@ -532,7 +568,7 @@ function readUrlParams() {
 // ── URL sync: update URL when filters change, locked params always preserved ──
 function syncUrlParams() {
   var p = new URLSearchParams();
-  p.set('tab', currentTab);
+  if(lockedFilters.tab) { p.set('tab_lock', lockedFilters.tab.join(',')); } else { p.set('tab', currentTab); }
   var tier = lockedFilters.tier || document.getElementById('tierFilter').value;
   var search = document.getElementById('searchInput').value;
   var country = lockedFilters.country || document.getElementById('l5CountryFilter').value;
