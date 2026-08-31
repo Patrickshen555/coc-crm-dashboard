@@ -43,6 +43,7 @@
   
   .filter-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; background: var(--surface); padding: 12px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow); position: sticky; top: 0; z-index: 50; }
   .filter-bar input, .filter-bar select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; background: var(--surface); }
+  .filter-bar select.port-range-lock { border-color: #1e88e5; background: #e3f2fd; font-weight: 600; }
   .btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
   .btn-secondary { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
   .btn-secondary:hover { background: #e8eaf6; }
@@ -264,6 +265,14 @@ var COL_LABELS = {
 var SCORE_COLS = ['TEU_SCORE','CM_SCORE','CM_OFF_SCORE','TOTAL_SCORE'];
 var TIER_COLS = ['TEU_TIER','CM_TIER','OFF_TIER','T_TIER'];
 
+// Show/hide a filter control; fully-locked controls stay hidden
+function showFilter(id, visible){
+  var el = document.getElementById(id);
+  if(!el) return;
+  if(el.dataset.hiddenLock === '1') return;  // locked by URL -> always hidden
+  el.style.display = visible ? '' : 'none';
+}
+
 function switchTab(tab) {
   if(lockedFilters.tab && lockedFilters.tab.indexOf(tab)<0) return;  // tab locked by URL (may be a set like L3,L4)
   currentTab = tab; currentPage = 1;
@@ -272,9 +281,9 @@ function switchTab(tab) {
     if(document.querySelectorAll('.tab-btn')[i].getAttribute('onclick').indexOf("'"+tab+"'")>=0)
       document.querySelectorAll('.tab-btn')[i].classList.add('active');
   }
-  document.getElementById('l5CountryFilter').style.display=tab==='L5'?'':'none';
-  document.getElementById('l2LaneFilter').style.display=(tab==='L2'||tab==='L4'||tab==='L5')?'':'none';
-  document.getElementById('l3PortFilter').style.display=(tab==='L3'||tab==='L4')?'':'none';
+  showFilter('l5CountryFilter', tab==='L5');
+  showFilter('l2LaneFilter', (tab==='L2'||tab==='L4'||tab==='L5'));
+  showFilter('l3PortFilter', (tab==='L3'||tab==='L4'));
   document.getElementById('l5Overview').style.display=tab==='L5'?'':'none';
   var titles={L1:'L1 Overall',L2:'L2 by Lane',L3:'L3 by Port',L4:'L4 Port×Lane',L5:'L5 Loading Country×Lane'};
   document.getElementById('tableTitle').textContent=titles[tab];
@@ -292,9 +301,7 @@ function disableTabButtons() {
       if(onclick.indexOf("'"+locked[i]+"'")>=0){ inside=true; break; }
     }
     if(!inside){
-      b.style.opacity='0.5';
-      b.style.cursor='not-allowed';
-      b.style.pointerEvents='none';
+      b.style.display='none';  // hide tabs outside the locked set
     }
   });
 }
@@ -305,7 +312,7 @@ function applyFilters() {
   var tierF = lockedFilters.tier || document.getElementById('tierFilter').value;
   var countryF = lockedFilters.country || document.getElementById('l5CountryFilter').value;
   var laneF = lockedFilters.lane || document.getElementById('l2LaneFilter').value;
-  var portF = lockedFilters.port || document.getElementById('l3PortFilter').value;
+  var portF = document.getElementById('l3PortFilter').value;
   // Multi-port support: comma-separated values (e.g. "CNSHA,CNNGB")
   var portList = portF ? portF.split(',') : [];
   // Dimension filters first (these define the "base" context for share calculation)
@@ -322,7 +329,7 @@ function applyFilters() {
   currentPage = 1; renderTable();
 }
 
-function resetFilters(){document.getElementById('searchInput').value='';if(!lockedFilters.tier)document.getElementById('tierFilter').value='';if(!lockedFilters.country)document.getElementById('l5CountryFilter').value='';if(!lockedFilters.lane)document.getElementById('l2LaneFilter').value='';if(!lockedFilters.port)document.getElementById('l3PortFilter').value='';applyFilters();}
+function resetFilters(){document.getElementById('searchInput').value='';if(!lockedFilters.tier)document.getElementById('tierFilter').value='';if(!lockedFilters.country)document.getElementById('l5CountryFilter').value='';if(!lockedFilters.lane)document.getElementById('l2LaneFilter').value='';if(Array.isArray(lockedFilters.port)){document.getElementById('l3PortFilter').value=lockedFilters.port.join(',');}else if(!lockedFilters.port){document.getElementById('l3PortFilter').value='';}applyFilters();}
 
 function renderTable() {
   var cols = TAB_COLUMNS[currentTab];
@@ -536,6 +543,28 @@ function readUrlParams() {
     var isLocked = !!lockVal || (val && (p.get('lock') === fk || p.get('lock') === 'all'));
     if(effVal) {
       var sel = document.getElementById(fm.id);
+      // PORT special: multi-value LOCK = RANGE lock (user can switch within the port set)
+      if(fk==='port' && effVal.indexOf(',')>=0 && isLocked && sel) {
+        var ports = effVal.split(',');
+        lockedFilters.port = ports;  // array = switchable range
+        sel.innerHTML = '';
+        var optAll = document.createElement('option');
+        optAll.value = ports.join(',');
+        optAll.textContent = ports.join(' + ') + ' (All)';
+        sel.appendChild(optAll);
+        for(var pi=0; pi<ports.length; pi++){
+          var op = document.createElement('option');
+          op.value = ports[pi];
+          op.textContent = ports[pi];
+          sel.appendChild(op);
+        }
+        var cur = p.get('port');
+        sel.value = (cur && ports.indexOf(cur)>=0) ? cur : ports.join(',');
+        sel.style.opacity='1';
+        sel.style.cursor='pointer';
+        sel.classList.add('port-range-lock');
+        continue;
+      }
       // Multi-value (comma-separated, e.g. port_lock=CNSHA,CNNGB): create a combined option
       if(effVal.indexOf(',') >= 0 && sel) {
         var opt = document.createElement('option');
@@ -547,9 +576,8 @@ function readUrlParams() {
       if(isLocked) {
         lockedFilters[fk] = effVal;
         if(sel) {
-          sel.disabled = true;
-          sel.style.opacity = '0.6';
-          sel.style.cursor = 'not-allowed';
+          sel.dataset.hiddenLock = '1';  // fully locked by URL -> hide the control
+          sel.style.display = 'none';
         }
       }
     }
@@ -574,12 +602,13 @@ function syncUrlParams() {
   var search = document.getElementById('searchInput').value;
   var country = lockedFilters.country || document.getElementById('l5CountryFilter').value;
   var lane = lockedFilters.lane || document.getElementById('l2LaneFilter').value;
-  var port = lockedFilters.port || document.getElementById('l3PortFilter').value;
+  var port = document.getElementById('l3PortFilter').value;
   // Locked params always written with _lock suffix
   if(lockedFilters.tier) { p.set('tier_lock', tier); } else if(tier) { p.set('tier', tier); }
   if(lockedFilters.country) { p.set('country_lock', country); } else if(country) { p.set('country', country); }
   if(lockedFilters.lane) { p.set('lane_lock', lane); } else if(lane) { p.set('lane', lane); }
-  if(lockedFilters.port) { p.set('port_lock', port); } else if(port) { p.set('port', port); }
+  if(Array.isArray(lockedFilters.port)) { p.set('port_lock', lockedFilters.port.join(',')); if(port) p.set('port', port); }
+  else if(lockedFilters.port) { p.set('port_lock', port); } else if(port) { p.set('port', port); }
   if(search) p.set('search', search);
   if(sortCol!=='TOTAL_SCORE'||sortDir!=='desc') {
     p.set('sort', sortCol);
